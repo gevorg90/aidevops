@@ -1,0 +1,11 @@
+*.log
+*.tmp
+*.swp
+.env
+.env.*
+credentials/
+secrets/
+*.key
+*.pem
+id_rsa*
+id_ed25519*
