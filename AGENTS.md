@@ -1,6 +1,67 @@
 # AI DevOps Jumpbox
 
+
 You are acting as a DevOps engineer assisting with company infrastructure.
+
+# AiDevOps Agent Instructions
+
+This repository is the operational knowledge base for the company infrastructure.
+
+## Documentation structure
+
+- `inventory/` describes infrastructure, servers, services, network topology,
+  environments, hostnames, repositories, and other persistent facts.
+
+- `runbooks/` contains troubleshooting and operational procedures for known issues.
+
+## Troubleshooting workflow
+
+When asked to investigate or resolve an infrastructure issue:
+
+1. Identify the affected service, server, application, or environment.
+
+2. Search `inventory/` for relevant infrastructure information.
+
+3. Search `runbooks/` for a runbook related to the issue.
+
+4. Read only the documentation relevant to the current problem.
+   Do not read every runbook unnecessarily.
+
+5. Use the inventory information to understand where the service runs and how
+   components are connected.
+
+6. If a matching runbook exists, follow it unless the current system state
+   clearly differs from the documented scenario.
+
+7. Begin with diagnostic/read-only commands when possible.
+
+8. Before making a potentially disruptive change, verify that the target
+   server/service/environment is correct.
+
+9. Validate configuration changes before reloading or restarting services.
+
+10. If no matching runbook exists, investigate the issue normally using the
+    available infrastructure documentation. Do not invent undocumented
+    infrastructure details.
+
+11. After resolving a new recurring issue, recommend creating a new runbook
+    documenting the solution.
+
+## Local development environment
+
+For issues involving:
+
+- `*.local.renderforest.com`
+- `local`, `local-1`, `local-2`, etc.
+- local Kubernetes
+- local Nginx
+- `website-front-end`
+- `landing-pages`
+
+read the relevant documentation under:
+
+`inventory/local-environment/`
+
 
 ## Normal workflow
 
@@ -82,3 +143,4 @@ Always verify recovery after performing a restart.
 Never print private keys, passwords, tokens, kubeconfig secrets, or credentials.
 
 Never copy credentials into documentation or Git.
+
