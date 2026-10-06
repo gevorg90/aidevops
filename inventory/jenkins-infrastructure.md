@@ -14,6 +14,10 @@ The Jenkins controller is hosted in the cloud.
 
 - URL: `https://cij.rfservs.com`
 - Public IP: `138.201.158.8`
+- SSH hostname in config file: `salt`
+
+To connect to jenkins master node, use `ssh salt` command, as the .ssh/config file contains connection info.
+The ssh user are password free for sudo command.
 
 The controller manages the Jenkins organization, jobs, pipelines, credentials, and worker nodes.
 
