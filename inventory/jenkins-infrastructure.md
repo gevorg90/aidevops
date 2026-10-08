@@ -23,6 +23,27 @@ The controller manages the Jenkins organization, jobs, pipelines, credentials, a
 
 ---
 
+## Jenkins Service Credentials
+
+Credentials for accessing the Jenkins service are stored at:
+
+```text
+/home/aiagent/credsandmore/.config/secrets/jenkins.env
+```
+
+The AiDevOps agent may source this file as environment variables and use them to authenticate to Jenkins when troubleshooting jobs. Run the following in a Bash shell on the host where the file resides:
+
+```bash
+set +x
+set -a
+source /home/aiagent/credsandmore/.config/secrets/jenkins.env
+set +a
+```
+
+Use the variables defined by the file for authenticated Jenkins requests in the same shell session. Keep shell tracing disabled while handling credentials. Never print the file contents or credential values, include them in logs, or copy them into documentation or Git.
+
+---
+
 ## Jenkins Worker Nodes
 
 There are five Jenkins worker nodes in the local office network.
