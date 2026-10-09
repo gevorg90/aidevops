@@ -29,3 +29,9 @@ In Jenkins, first verify whether npm authentication is available inside the actu
 ## Learned pattern
 
 When a private package works elsewhere but Jenkins gets a 404 during pnpm install, suspect registry authentication before assuming the package/version does not exist.
+
+For internal `video-templates-ssr-1.0.N-development.tgz` dependencies, packages
+may actually have been deleted from development Nexus storage. After confirming
+the cause, rebuild the matching `video-templates-ssr/development-N` producer
+before retrying the consumer. See
+[missing development SSR package recovery](missing-development-video-templates-ssr-package.md).
