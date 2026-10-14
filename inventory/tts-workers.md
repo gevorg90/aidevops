@@ -57,7 +57,7 @@ All hosts run Debian 13 (trixie), x86_64. Versions are inspection baselines, not
 
 On **every worker**, Compose configuration is `/home/rfuser/ttsw.yaml`, project `rfuser`, working directory `/home/rfuser`. Live Compose labels, port bindings, GPU assignments, and memory limits matched this file during inspection. Use the Compose plugin syntax `docker compose -f /home/rfuser/ttsw.yaml ...`.
 
-The configured image is `rfhub.rfservs.com:8443/tts-worker:latest`, from the owner-identified local Nexus registry. `rfhub.rfservs.com` resolves to `192.168.0.44` on all workers. No local image-build or external deployment pipeline was identified; the authoritative build/release process remains unknown.
+The configured image is `rfhub.rfservs.com:8443/tts-worker:latest`, from the owner-identified local Nexus registry. `rfhub.rfservs.com` resolves to `192.168.0.44` on all workers. The build source and manual build/push instructions are documented below; the actual builder host, external CI/CD, and source commit used for each deployed image remain unverified.
 
 Each container has one explicit NVIDIA GPU reservation (`driver: nvidia`, capability `gpu`, `device_ids` below), restart policy `unless-stopped`, 64 MiB shared memory, and no configured init or Docker health check. Runtime is `runc` with NVIDIA device requests. Containers run as root and have **no bind mounts or Docker volumes**.
 
@@ -106,7 +106,51 @@ The TTS HTTP application is **ComfyUI 0.37.4** with custom TTS/audio nodes, not 
 
 Container launch configuration references `start.sh`. The script starts SSH with `service ssh start`, cleans the ComfyUI output path, and launches `comfy launch` in the background on `0.0.0.0:8011`, redirecting logs to `comfy.log`. PID 1 is `sleep`; the active server uses `/workspace/comfyui/venv/bin/python`. No supervisor was found. Startup script and inspected main/requirements files had identical hashes across all containers.
 
+The repository startup script matches the SHA-256 observed in all 13 containers. It specifies `--cache-lru 50`, deletes non-hidden contents of the output directory, and overwrites `comfy.log` on launch. It waits for a curl request to `http://127.0.0.1:8011` to complete before returning; the Dockerfile then executes `sleep infinity`. This wait has no deadline and uses no `--fail`, so an HTTP error response can satisfy it. It does not provide ongoing health supervision.
+
 Application source, models, caches, logs, and local database live in the container filesystem. Changes survive a stop/start of the same container but are not preserved by mounts when it is replaced. The startup output cleanup also means outputs should not be assumed to survive restart. External persistence/backup arrangements are unverified.
+
+## Image build source and application design
+
+Source reviewed on 2026-10-14 in local `sysadmin-utils` checkout at commit `79b511789a22`. This is a source analysis, not proof that the current Dockerfile built every running image.
+
+- Build context: `repos/sysadmin-utils/ansible/playbook/tts-worker/DockerImage/`.
+- [Dockerfile](../repos/sysadmin-utils/ansible/playbook/tts-worker/DockerImage/Dockerfile): image definition, dependency installation, and model downloads.
+- [start.sh](../repos/sysadmin-utils/ansible/playbook/tts-worker/DockerImage/start.sh): container startup; its contents match the deployed startup scripts.
+- [commands](../repos/sysadmin-utils/ansible/playbook/tts-worker/DockerImage/commands): documents building from this context with tag `rfhub.rfservs.com:8443/tts-worker`, pushing it, and using Compose. Commands are reference material, not an automatically executed deployment pipeline.
+
+The image starts from `python:3.13-slim-trixie`, uses BuildKit apt/pip cache mounts, and installs Git, SSH server, FFmpeg, tmux, download tools, and C/C++ build tools. It creates the main virtual environment first and places it at the front of `PATH`. Comfy CLI installs NVIDIA-enabled ComfyUI **v0.37.4 with CUDA 13.0**; GPU access still depends on the host driver and NVIDIA Container Toolkit. The image copies reference MP3 files from `ref-sounds/` into ComfyUI's input directory and an authorized-keys file into root's SSH directory. Key contents are not documented.
+
+ComfyUI is the HTTP workflow engine. OmniVoice supplies the TTS component; Renderforest audio nodes extend the workflow with audio processing and Seed-VC conversion. Whisper and separator models support transcription and vocal extraction. These are available components, not a verified sequence for every production job; production workflow definitions/client requests have not been inspected.
+
+### Why there are two Python environments
+
+The Dockerfile documents a dependency conflict: Seed-VC requires NumPy below 2, while the intended audio-separator stack requires NumPy 2 or newer. Installing both together could downgrade audio-separator and remove the `use_native_fp16` feature used by `AudioExtractVocals`.
+
+- Main environment: ComfyUI, its custom nodes, and `audio-separator[gpu]>=0.46`; other base packages include Gradio, torchaudio, Hugging Face Hub, `sageattention==1.0.6`, bitsandbytes, and `accelerate>=0.26.0`.
+- Seed-VC environment: created explicitly with `/usr/local/bin/python3`, avoiding the main environment selected by `PATH`; installs `seed-vc` and `torchcodec` independently.
+- The documented node design keeps ComfyUI in its own interpreter and communicates with `seedvc_server.py` over HTTP, with a `seed_vc.inference` subprocess fallback using `SEEDVC_PYTHON`.
+- A build-time patch makes BigVGAN loader arguments `proxies` and `resume_download` optional to accommodate newer Hugging Face Hub calling conventions. First-job `TypeError` failures in that loader should prompt checking this patch and the installed Seed-VC/Hub versions.
+
+### Models bundled by the current Dockerfile
+
+| Model/source | Intended role | Destination inside image |
+|---|---|---|
+| `openai/whisper-large-v3-turbo` | Transcription | `ComfyUI/models/audio_encoders/openai_whisper-large-v3-turbo` under the workspace |
+| `drbaph/OmniVoice-bf16` | TTS | `ComfyUI/models/omnivoice/OmniVoice` under the workspace |
+| Mel-band RoFormer checkpoint, matching YAML, `download_checks.json` | Vocal separation | `AUDIO_SEPARATOR_MODEL_DIR` |
+| `Plachta/Seed-VC`, `funasr/campplus` | Voice conversion dependencies | Hugging Face cache layout in `/root/checkpoints` |
+| `nvidia/bigvgan_v2_22khz_80band_256x` | Vocoder | Hugging Face cache layout in `/root/checkpoints/hf_cache` |
+
+Seed-VC downloads deliberately use cache layout rather than `--local-dir` because the documented inference code resolves repository IDs through the Hub cache. The intent is to avoid first-job model downloads. Build steps were not executed, and the complete model-cache contents of deployed images were not verified.
+
+### Source inconsistencies relevant to maintenance
+
+- **Warm Seed-VC startup is missing:** the Dockerfile comment requires `seedvc_server.py` on `127.0.0.1:8199`, using the Seed-VC interpreter and logging to `/workspace/seedvc-server.log`. The copied `start.sh` contains no such launch. The comment describes an approximately 15-second cold-load cost per fallback conversion; that timing was not measured. ComfyUI availability does not verify Seed-VC readiness.
+- **Build inputs float:** the Python base tag, most pip dependencies, shallow Git clones, and model downloads are not pinned to immutable revisions. ComfyUI v0.37.4 and sageattention 1.0.6 are explicitly pinned. Build-cache reuse and changing upstream inputs can produce different dependency/node versions under the same `latest` tag, consistent with the observed worker 4 differences; exact image provenance remains unknown.
+- **Dependency checks are incomplete:** the audio-separator minimum applies to its install command, while later pip/custom-node installs can alter the environment. There is no final dependency validation or inference smoke test in this Dockerfile. The Renderforest audio-node repository is cloned without an explicit install of its own requirements file; coverage by other install steps is unverified.
+- **Repository Compose differs from live configuration:** `DockerImage/docker-compose.yaml` assigns `tts-2` to GPU 0, duplicating `tts-0`, and omits the memory limit for `tts-4`. Live worker 1 instead assigns GPU 2 to `tts-2` and enforces 32 GiB for `tts-4`. The repository template also specifies `pull_policy: always`. Use `/home/rfuser/ttsw.yaml` and the live mapping table when investigating deployed containers.
+- **Alternate setup path is inconsistent:** `DockerImage/setup.sh` installs Seed-VC into the main environment, lacks the ComfyUI version pin and the separate Seed-VC environment/patch/model prefetch, and uses `AUDIO_SEPARATOR_MODEL_DIR` without defining it locally. It is not used by the Dockerfile. The adjacent Ansible `comfy.yml` copies scripts to `/workspace/comfyui/start/` on hosts, whereas this image uses `/workspace/start/`; it does not establish how current Docker containers were deployed. Do not treat these alternate files as equivalent to the image build.
 
 ## Source repositories and application differences
 
